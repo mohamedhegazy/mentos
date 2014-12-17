@@ -96,7 +96,7 @@ struct thread
     
 
     /*priority donation  */
-    int old_priority;                /*Save initial priority if thread's priority changes to a donated one */
+    int old_priority;                   /*Save initial priority if thread's priority changes to a donated one */
     struct lock *lock_waiting;
     struct list donation_list;
     struct list_elem donation_element;

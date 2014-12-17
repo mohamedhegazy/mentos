@@ -106,7 +106,9 @@ struct thread
     int recent_cpu;                      /*Use fixed_point.h to calculate recent cpu ,treated as fixed point*/
     int nice;                            /*Niceness of thread ,treated as integer*/
 
-
+    /*File system calls */
+    int file_descriptor;
+    struct list files_owned;
     
 #ifdef USERPROG
     /* Owned by userprog/process.c. */

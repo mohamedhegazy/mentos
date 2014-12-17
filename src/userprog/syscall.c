@@ -1,4 +1,5 @@
 #include "userprog/syscall.h"
+#include "user/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include "threads/interrupt.h"
@@ -7,46 +8,36 @@
 #include "filesys/inode.h"
 #include "threads/malloc.h"
 #include "threads/synch.h"
+#include "threads/vaddr.h"
 #include <list.h>
 
-static struct list all_inodes;
-static struct list open_inodes;
-static struct lock file_lock;
-
-struct inode_name{
-    struct inode *inode;        /* File's inode. */
-    const char * file;
-    struct list_elem elem;              /* Element in inode list. */   
+struct file_owned{
+    struct file * file;        /* File's pointer. */
+    struct list_elem elem;              /* Element in file list. */   
     int file_descriptor;
     	
 };
 static void syscall_handler (struct intr_frame *);
-bool create (const char * file , unsigned initial_size );
-bool remove (const char * file );
-int open (const char * file );
-int filesize (int fd );
-int read (int fd , void * buffer , unsigned size );
-int write (int fd , const void * buffer , unsigned size );
-void seek (int fd , unsigned position );
-unsigned tell (int fd );
-void close (int fd );
-int file_descriptor_counter=1;
+struct lock * file_lock;
 void
 syscall_init (void) 
 {
     intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-    list_init(&all_inodes);
-    list_init(&open_inodes);
     lock_init(&file_lock);
 }
+void * valid_refrence (void * ptr){
+if(!is_user_vaddr (ptr))
+thread_exit(); 
+return ptr;
 
+}
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
   printf ("system call!\n");
 //  thread_exit ();
   
-  int call=&(f->esp);
+  int call=*((int *)valid_refrence(f->esp));
   bool val;
   int value;
   switch(call){
@@ -65,38 +56,38 @@ syscall_handler (struct intr_frame *f UNUSED)
   f->eax=value;
   break;
   case     SYS_CREATE:
-  val=create(&f->esp+4,&f->esp+8);
+  val=create(*((char *)valid_refrence(f->esp+1)),*((int *)valid_refrence(f->esp+2)));
   f->eax=val;
   break;
   case     SYS_REMOVE:
-  val=remove(&f->esp+4);
+  val=remove(*((char *)valid_refrence(f->esp+1)));
   f->eax=val;
   break;
   case    SYS_OPEN:
-  value=open(&f->esp+4);
+  value=open(*((int *)valid_refrence(f->esp+1)));
   f->eax=value;  
   break;
   case SYS_FILESIZE:
-  value=filesize(&f->esp+4);  
+  value=filesize(*((int *)valid_refrence(f->esp+1)));  
     f->eax=value;  
   break;
   case SYS_READ:
-  value=read(&f->esp+4,&f->esp+8,&f->esp+12);  
+  value=read(*((int *)valid_refrence(f->esp+1)),*((char *)valid_refrence(f->esp+2)),*((int *)valid_refrence(f->esp+3)));  
     f->eax=value;  
   break;  
   case SYS_WRITE:
-  value=write(&f->esp+4,&f->esp+8,&f->esp+12);  
+  value=write(*((int *)valid_refrence(f->esp+1)),*((char *)valid_refrence(f->esp+2)),*((int *)valid_refrence(f->esp+3)));  
     f->eax=value;  
   break;
   case SYS_SEEK:
-  seek(&f->esp+4,&f->esp+8);  
+  seek(*((int *)valid_refrence(f->esp+1)),*((int *)valid_refrence(f->esp+2)));  
   break;
   case SYS_TELL:
-  value=tell(&f->esp+4);
+  value=tell(*((int *)valid_refrence(f->esp+1)));
   f->eax=value;
   break;
   case SYS_CLOSE:
-  close(&f->esp+4);
+  close(*((int *)valid_refrence(f->esp+1)));
   break;
   }
 }
@@ -111,86 +102,52 @@ syscall_handler (struct intr_frame *f UNUSED)
 
 
 bool create (const char * file , unsigned initial_size ){
-block_sector_t sector;
 lock_acquire(&file_lock);
-bool res=inode_create(sector,initial_size);
-if(!res)
-return false;
-struct inode * inode=inode_open(sector);
+bool value=filesys_create (file, initial_size); 
 lock_release (&file_lock); 
-if(inode==NULL)
-return false;
-struct inode_name *temp=NULL;
-temp=calloc(1,sizeof *temp);
-temp->file=file;
-temp->inode=inode;
-list_push_back (&all_inodes, &temp->elem);
-lock_acquire(&file_lock);
-inode_close(inode);
-lock_release (&file_lock); 
-return res;
+return value;
 }
 bool remove (const char * file ){
- struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&all_inodes); e != list_end (&all_inodes);
-       e = list_next (e)) 
-    {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (strcmp(file,inode_name->file)==0) 
-        {
-                lock_acquire(&file_lock);
-		inode_remove(inode_name->inode);
-		lock_release (&file_lock); 
-		list_remove(e);
-		return true;
-        }
-    }
- return false;
+ lock_acquire(&file_lock);
+ bool value=filesys_remove(file);
+ lock_release (&file_lock); 
+ return value;
 }
 int open (const char * file ){
-
- struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&all_inodes); e != list_end (&all_inodes);
-       e = list_next (e)) 
-    {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (strcmp(file,inode_name->file)==0) 
-        {       lock_acquire (&file_lock); 
-		struct file * file=file_open(inode_name->inode);
-		lock_release (&file_lock); 
-		if(file==NULL)
-			return -1;
-		else{
-		file_descriptor_counter++;
-		inode_name->file_descriptor=file_descriptor_counter;		
-		list_push_back (&open_inodes, &inode_name->elem);
-		return inode_name->file_descriptor;
-		}
-        }
+    lock_acquire (&file_lock); 
+    struct file * opened=filesys_open(file);
+    if(opened== NULL){
+    lock_release (&file_lock); 
+    return -1;
     }
-return -1;
+    thread_current()->file_descriptor=thread_current()->file_descriptor+1;
+    int file_desc=thread_current()->file_descriptor;
+    struct file_owned *owned=malloc(sizeof(struct file_owned));
+    owned->file=opened;
+    owned->file_descriptor=file_desc;
+    list_insert(&thread_current()->files_owned,owned);
+    lock_release (&file_lock); 
+    return file_desc;
 }
 int filesize (int fd ){
 if(fd<=0 || fd == 1 )
 return;
-
+lock_acquire (&file_lock); 
+	
  struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+ struct file_owned *owned;
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned = list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {
-        lock_acquire (&file_lock); 
-		
-	off_t length=inode_length(inode_name);
+	off_t length=file_length(owned->file);
 	lock_release (&file_lock); 
-		return length;
+	return length;
         }
     }
+    lock_release (&file_lock); 
 return 0;
 }
 int read (int fd , void * buffer , unsigned size ){
@@ -201,32 +158,34 @@ return 0;
 
 if(fd==0)
 {
-buffer=input_getc();
-return 1;
+int count=0;
+char * temp_buffer=*((char *)buffer);
+while(count<size){
+temp_buffer[count++]=input_getc();
+}
+return size;
 }
 else{
+        lock_acquire (&file_lock); 
  struct list_elem *e;
- struct inode_name *inode_name;
- bool found=false;
+ struct file_owned *owned;
  off_t read;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned = list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {
-	found=true;
-        lock_acquire (&file_lock); 
-	struct file *f=	file_open(inode_name);
+	
+	struct file *f=	file_open(owned->file);
 	read=file_read (f, buffer, size); 
-	lock_release (&file_lock); 
+	
         }
     }
-	if(found)
-	return read;
-	else{
-		return -1;
-	     }
+
+		lock_release (&file_lock); 
+
+		return read;
 }
 }
 int write (int fd , const void * buffer , unsigned size ){
@@ -237,12 +196,12 @@ return 0;
 if(fd==1){
 int temp_size=size/400;
 if(temp_size==0)
-putbuf(buffer,size);
+putbuf(*((char *)buffer),size);
 else{
 int unit=size/400;
 int count=1;
 while(temp_size>0){
-putbuf(buffer+count*unit,unit);
+putbuf(*((char *)buffer+count*unit),unit);
 temp_size--;
 count++;
 }
@@ -250,80 +209,84 @@ count++;
 return size;
 }
 else{
+        lock_acquire (&file_lock); 
+
  struct list_elem *e;
- struct inode_name *inode_name;
+ struct file_owned *owned;
  off_t written=0;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned = list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {
-        lock_acquire (&file_lock); 
-	struct file *f=	file_open(inode_name);
-	written=file_write (f, buffer, size); 
-	lock_release (&file_lock); 
+	written=file_write (owned->file, buffer, size); 
         }
     }
+    	lock_release (&file_lock); 
+
 return written;
 }
 }
 void seek (int fd , unsigned position ){
 if(fd<=0 || fd == 1 )
 return;
+        	lock_acquire (&file_lock); 
 
  struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+ struct file_owned *owned;
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned = list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {	
-        	lock_acquire (&file_lock); 
-        	struct file *f=	file_open(inode_name);
-		file_seek (f, position);
-		lock_release (&file_lock); 
+		file_seek (owned->file, position);
         }
     }
+    		lock_release (&file_lock); 
+
 }
 unsigned tell (int fd ){
 if(fd<=0 || fd == 1 )
 return;
+        	lock_acquire (&file_lock); 
 
  struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+ struct file_owned *owned;
+ 		off_t val;
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned = list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {	
-        	lock_acquire (&file_lock); 
-        	struct file *f=	file_open(inode_name);
-		off_t val=file_tell (f); 
-		lock_release (&file_lock); 
-		return val;
+        	struct file *f=	file_open(owned->file);
+		val=file_tell (f); 
+		
         }
     }
+    		lock_release (&file_lock); 
+    		return val;
+
 }
 void close (int fd ){
 if(fd<=0 || fd == 1 )
 return;
+	        lock_acquire (&file_lock); 
+
  struct list_elem *e;
- struct inode_name *inode_name;
-  for (e = list_begin (&open_inodes); e != list_end (&open_inodes);
+ struct file_owned *owned;
+  for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
-      inode_name = list_entry (e, struct inode_name, elem);
-      if (inode_name->file_descriptor==fd) 
+      owned= list_entry (e, struct file_owned, elem);
+      if (owned->file_descriptor==fd) 
         {	
-	        lock_acquire (&file_lock); 
-        	struct file *f=	file_open(inode_name);
-		file_close (f);
-		lock_release (&file_lock); 
+		file_close (owned->file);
 		list_remove(e);		
-		return;
-        }
+       }
     }
+    		lock_release (&file_lock); 
+
 }
