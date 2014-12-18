@@ -26,8 +26,8 @@ syscall_init (void)
     lock_init(&file_lock);
 }
 void * valid_refrence (void * ptr){
-if(!is_user_vaddr (ptr))
-exit(0); 
+if(!is_user_vaddr ((int *)ptr) || ptr< (void *)0x08048000)
+thread_exit(); 
 return ptr;
 
 }
@@ -42,21 +42,21 @@ syscall_handler (struct intr_frame *f UNUSED)
   int value;
   switch(call){
   case SYS_HALT:
-  //halt();
+  halt();
   break;
   case SYS_EXIT:
-  //exit(&f->esp+4);
+  exit(*((int *)valid_refrence(f->esp+1)));
   break;
   case SYS_EXEC:  
-  //value=exec(&f->esp+4);
+  value=exec(*((int *)valid_refrence(f->esp+1)));
   f->eax=value;	
   break;
   case SYS_WAIT:
-  //value=wait(&f->esp+4);
+  value=wait(*((int *)valid_refrence(f->esp+1)));
   f->eax=value;
   break;
   case     SYS_CREATE:
-  val=create(*((char *)valid_refrence(f->esp+1)),*((int *)valid_refrence(f->esp+2)));
+  val=create(*((char *)valid_refrence(f->esp+1)),*((unsigned *)valid_refrence(f->esp+2)));
   f->eax=val;
   break;
   case     SYS_REMOVE:
@@ -64,7 +64,7 @@ syscall_handler (struct intr_frame *f UNUSED)
   f->eax=val;
   break;
   case    SYS_OPEN:
-  value=open(*((int *)valid_refrence(f->esp+1)));
+  value=open(*((char *)valid_refrence(f->esp+1)));
   f->eax=value;  
   break;
   case SYS_FILESIZE:
@@ -72,15 +72,15 @@ syscall_handler (struct intr_frame *f UNUSED)
     f->eax=value;  
   break;
   case SYS_READ:
-  value=read(*((int *)valid_refrence(f->esp+1)),*((char *)valid_refrence(f->esp+2)),*((int *)valid_refrence(f->esp+3)));  
+  value=read(*((int *)valid_refrence(f->esp+1)),((void *)valid_refrence(f->esp+2)),*((unsigned *)valid_refrence(f->esp+3)));  
     f->eax=value;  
   break;  
   case SYS_WRITE:
-  value=write(*((int *)valid_refrence(f->esp+1)),*((char *)valid_refrence(f->esp+2)),*((int *)valid_refrence(f->esp+3)));  
+  value=write(*((int *)valid_refrence(f->esp+1)),((void *)valid_refrence(f->esp+2)),*((unsigned *)valid_refrence(f->esp+3)));  
     f->eax=value;  
   break;
   case SYS_SEEK:
-  seek(*((int *)valid_refrence(f->esp+1)),*((int *)valid_refrence(f->esp+2)));  
+  seek(*((int *)valid_refrence(f->esp+1)),*((unsigned *)valid_refrence(f->esp+2)));  
   break;
   case SYS_TELL:
   value=tell(*((int *)valid_refrence(f->esp+1)));
@@ -93,6 +93,83 @@ syscall_handler (struct intr_frame *f UNUSED)
 }
 
 
+/*
+Terminates Pintos by calling shutdown_power_off()(declared
+in ‘devices/shutdown.h’).This should be seldom used, because you lose
+some information about possible deadlock situations, etc.
+*/
+void halt(void)
+{
+  shutdown_power_off();	
+}
+
+/*
+Terminates the current user program, returning status to the kernel. If the process’s parent waits for it (see below), this is the status that will be returned. Conventionally,
+a status of 0 indicates success and nonzero values indicate errors
+*/
+void exit (int status)
+{
+  struct thread *t=thread_current();
+  printf ("%s: exit(%d)\n", t->name, status);
+  t->child1->status=status;
+  sema_up(&t->child1->terminated);
+  thread_exit();
+}
+
+/*
+Runs the executable whose name is given in cmd line, passing any given arguments,
+and returns the new process’s program id (pid). Must return pid -1, which otherwise should not be a valid pid, if the program cannot load or run for any reason. Thus,
+the parent process cannot return from the exec until it knows whether the child process successfully loaded its executable. You must use appropriate synchronization to ensure this.
+*/
+pid_t exec(const char *cmd_line)
+{
+  pid_t pid=process_execute(cmd_line);
+  struct child* cp=getChild(pid);
+  while(cp->loaded == 0){
+  	//terminated.wait();
+  }
+  if(cp->loaded == 2)
+  {
+	return -1;
+  }	
+  return pid;
+}
+
+
+
+int wait (pid_t pid)
+{
+  process_wait(pid);
+}
+
+//setting a new child with the given pid
+struct child* setChild(int pid){
+  struct child* newChild=malloc(sizeof(struct child));
+  newChild->pid=pid;
+  newChild->exit=false;
+  newChild->wait=false;
+  newChild->status=-1;
+  newChild->loaded=0;
+  sema_init(&newChild->terminated,1);
+  list_push_back(&thread_current()->children,&newChild->elem);
+  return newChild;
+}
+
+
+/*get the child with the given pid from the children list of the current thread */
+struct child* getChild(int pid){
+  struct thread *t=thread_current();
+  struct list_elem *element;
+  
+  for(element=list_begin(&t->children); element!=list_end(&t->children);element=list_next(element)){
+	struct child *newChild=list_entry(element,struct child,elem);	  
+	if(pid == newChild->pid)
+		{
+			return newChild;
+		}
+  	}
+	return NULL;
+}
 
 
 
@@ -136,25 +213,25 @@ lock_acquire (&file_lock);
 	
  struct list_elem *e;
  struct file_owned *owned;
+ 	off_t length=-1;
   for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
       owned = list_entry (e, struct file_owned, elem);
       if (owned->file_descriptor==fd) 
         {
-	off_t length=file_length(owned->file);
+	length=file_length(owned->file);
 	lock_release (&file_lock); 
-	return length;
-        }
+	}
     }
     lock_release (&file_lock); 
-return 0;
-}
+return length;
+        }
 int read (int fd , void * buffer , unsigned size ){
 if(fd<0 || fd == 1 )
-return;
+return -1;
 if(size<=0)
-return 0;
+return -1;
 
 if(fd==0)
 {
@@ -169,7 +246,7 @@ else{
         lock_acquire (&file_lock); 
  struct list_elem *e;
  struct file_owned *owned;
- off_t read;
+ off_t read=-1;
   for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
@@ -190,22 +267,11 @@ else{
 }
 int write (int fd , const void * buffer , unsigned size ){
 if(fd<=0)
-return;
+return -1;
 if(size<=0)
-return 0;
+return -1;
 if(fd==1){
-int temp_size=size/400;
-if(temp_size==0)
-putbuf(*((char *)buffer),size);
-else{
-int unit=size/400;
-int count=1;
-while(temp_size>0){
-putbuf(*((char *)buffer+count*unit),unit);
-temp_size--;
-count++;
-}
-}
+putbuf(buffer,size);
 return size;
 }
 else{
@@ -254,7 +320,7 @@ return;
 
  struct list_elem *e;
  struct file_owned *owned;
- 		off_t val;
+ 		off_t val=-1;
   for (e = list_begin (&thread_current()->files_owned); e != list_end (&thread_current()->files_owned);
        e = list_next (e)) 
     {
@@ -284,7 +350,8 @@ return;
       if (owned->file_descriptor==fd) 
         {	
 		file_close (owned->file);
-		list_remove(e);		
+		list_remove(&owned->elem);		
+		free(owned);
        }
     }
     		lock_release (&file_lock); 

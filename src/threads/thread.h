@@ -110,6 +110,10 @@ struct thread
     int file_descriptor;
     struct list files_owned;
     
+    tid_t parent;         // the parent of the current thread
+    struct list children; //a list of all children of this thread
+    struct child* child1;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */

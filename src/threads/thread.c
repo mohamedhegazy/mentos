@@ -211,6 +211,10 @@ thread_create (const char *name, int priority,
 
   intr_set_level (old_level);
 
+  t->parent=thread_tid();
+  struct child *c=setChild(t->tid);
+  t->child1=c; 
+
   /* Add to run queue. */
   thread_unblock (t);
   
@@ -543,6 +547,10 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init(&t->donation_list);
   t->nice=0;
   t->recent_cpu=0;
+  
+   list_init(&t->children); 
+  t->child1=NULL; 
+  t->parent=-1;
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

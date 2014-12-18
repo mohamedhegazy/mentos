@@ -1,4 +1,5 @@
 #include "userprog/process.h"
+#include "userprog/syscall.h"
 #include <debug.h>
 #include <inttypes.h>
 #include <round.h>
@@ -60,7 +61,12 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
+  if(success){
+	thread_current()->child1->loaded=true;
+  }
+  else{
+	thread_current()->child1->loaded=false;	
+  }
   /* If load failed, quit. */
   palloc_free_page (file_name);
   if (!success) 
@@ -88,9 +94,27 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  uint32_t cnt=1<<31;
-  while(cnt-- > 0);
-  return -1;
+  bool found=false;
+  struct child * ch;
+  struct list_elem *e;
+  for (e = list_begin (&thread_current()->children); e != list_end (&thread_current()->children);
+       e = list_next (e)) 
+    {
+      ch = list_entry (e, struct child, elem);
+      if (ch->pid==child_tid) 
+        {
+        found=true;
+        break;
+	}
+    }
+    if(!found ||  ch->wait==true)
+    return -1;
+    ch->wait=true;
+    sema_down(&ch->terminated);    
+    //while(ch->exit==false);
+    list_remove(&ch);
+    return ch->status;
+  
 }
 
 /* Free the current process's resources. */
@@ -99,6 +123,17 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+  thread_current()->child1->exit=true;
+  struct list_elem *e;
+    
+  struct child *ch;
+  for (e = list_begin (&thread_current()->children); e != list_end (&thread_current()->children);
+       e = list_next (e)) 
+    {
+      ch = list_entry (e, struct child, elem);
+      free(ch);
+      list_remove(&ch->elem);
+    }
 
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
